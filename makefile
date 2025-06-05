@@ -8,7 +8,7 @@ WARN_FLAGS = -Wall -Wno-array-bounds \
 	     -Wno-unused-parameter \
 	     -Wno-strict-overflow \
 	     -Wno-return-type -Werror
-CFLAGS = $(WARN_FLAGS) $(DEFINES) -g -Ilib -Ilib/libvim/proto -std=c99 -O2 #-fsanitize=address -fsanitize=undefined
+CFLAGS = $(WARN_FLAGS) $(DEFINES) -g -Ilib -Ilib/libvim -Ilib/libvim/proto -std=c99 -O2 #-fsanitize=address -fsanitize=undefined
 ODIR = bin
 SRC = src
 
@@ -19,13 +19,13 @@ OBJ = $(patsubst %, $(ODIR)/%, $(_OBJ))
 
 all: $(ODIR)/svim
 
-x86: CFLAGS = $(WARN_FLAGS) $(DEFINES) -g -Ilib -Ilib/libvim/proto -std=c99 -O2 -target x86_64-apple-macos12.0
+x86: CFLAGS = $(WARN_FLAGS) $(DEFINES) -g -Ilib -Ilib/libvim -Ilib/libvim/proto -std=c99 -O2 -target x86_64-apple-macos12.0
 x86: $(ODIR)/svim
 	mv $(ODIR)/svim $(ODIR)/svim_x86
 	rm -rf $(ODIR)/*.o
 	rm -rf $(ODIR)/*.om
 
-arm64: CFLAGS = $(WARN_FLAGS) $(DEFINES) -g -Ilib -Ilib/libvim/proto -std=c99 -O2 -target arm64-apple-macos12.0
+arm64: CFLAGS = $(WARN_FLAGS) $(DEFINES) -g -Ilib -Ilib/libvim -Ilib/libvim/proto -std=c99 -O2 -target arm64-apple-macos12.0
 arm64: $(ODIR)/svim
 	mv $(ODIR)/svim $(ODIR)/svim_arm64
 	rm -rf $(ODIR)/*.o
