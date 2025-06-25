@@ -28,17 +28,144 @@ void ax_begin(struct ax* ax) {
   assert(ax->system_element != NULL);
 }
 
+static inline void debug_print_attributed_text(CFTypeRef attributed_string_ref) {
+  if (!attributed_string_ref) {
+    printf("[DEBUG] No attributed string available\n");
+    return;
+  }
+  
+  printf("[DEBUG] ==> Attributed Text Debug Info <==\n");
+  
+  // Get basic CFTypeRef info
+  CFTypeID type_id = CFGetTypeID(attributed_string_ref);
+  CFStringRef type_desc = CFCopyTypeIDDescription(type_id);
+  char type_buffer[256];
+  CFStringGetCString(type_desc, type_buffer, sizeof(type_buffer), kCFStringEncodingUTF8);
+  printf("[DEBUG] CFTypeRef Type: %s (ID: %lu)\n", type_buffer, type_id);
+  CFRelease(type_desc);
+  
+  // Try to get plain string from attributed string using Core Foundation
+  CFStringRef plain_string = NULL;
+  
+  // Check if it's a CFAttributedString and try to extract plain text
+  if (CFGetTypeID(attributed_string_ref) == CFAttributedStringGetTypeID()) {
+    plain_string = CFAttributedStringGetString((CFAttributedStringRef)attributed_string_ref);
+    if (plain_string) {
+      CFIndex length = CFStringGetLength(plain_string);
+      printf("[DEBUG] Attributed string plain text length: %ld\n", length);
+      
+      char* plain_text = cfstring_get_cstring(plain_string);
+      if (plain_text) {
+        printf("[DEBUG] Plain text: '%.100s%s'\n", 
+               plain_text, strlen(plain_text) > 100 ? "..." : "");
+        
+        // Get attribute count and ranges
+        CFIndex attr_length = CFAttributedStringGetLength((CFAttributedStringRef)attributed_string_ref);
+        printf("[DEBUG] Attributed string length: %ld\n", attr_length);
+        
+        // Sample some attributes at different positions
+        for (CFIndex i = 0; i < attr_length && i < 10; i += (attr_length > 10 ? attr_length/10 : 1)) {
+          CFRange effective_range;
+          CFDictionaryRef attributes = CFAttributedStringGetAttributes(
+            (CFAttributedStringRef)attributed_string_ref, i, &effective_range);
+          
+          if (attributes) {
+            CFIndex attr_count = CFDictionaryGetCount(attributes);
+            printf("[DEBUG]   Position %ld: %ld attributes, effective range (%ld, %ld)\n", 
+                   i, attr_count, effective_range.location, effective_range.length);
+            
+            // Print attribute keys
+            CFIndex dict_count = CFDictionaryGetCount(attributes);
+            if (dict_count > 0) {
+              const void **keys = malloc(sizeof(void*) * dict_count);
+              const void **values = malloc(sizeof(void*) * dict_count);
+              CFDictionaryGetKeysAndValues(attributes, keys, values);
+              
+              for (CFIndex j = 0; j < dict_count; j++) {
+                CFStringRef key = (CFStringRef)keys[j];
+                char key_buffer[256];
+                CFStringGetCString(key, key_buffer, sizeof(key_buffer), kCFStringEncodingUTF8);
+                
+                CFTypeRef value = values[j];
+                CFStringRef value_desc = CFCopyDescription(value);
+                char value_buffer[512];
+                CFStringGetCString(value_desc, value_buffer, sizeof(value_buffer), kCFStringEncodingUTF8);
+                
+                printf("[DEBUG]     %s: %s\n", key_buffer, value_buffer);
+                CFRelease(value_desc);
+              }
+              
+              free(keys);
+              free(values);
+            }
+          }
+        }
+        
+        free(plain_text);
+      }
+    }
+  } else {
+    printf("[DEBUG] Not a CFAttributedString, trying as CFString\n");
+    if (CFGetTypeID(attributed_string_ref) == CFStringGetTypeID()) {
+      char* text = cfstring_get_cstring((CFStringRef)attributed_string_ref);
+      if (text) {
+        printf("[DEBUG] Raw CFString: '%.100s%s'\n", 
+               text, strlen(text) > 100 ? "..." : "");
+        free(text);
+      }
+    }
+  }
+  
+  printf("[DEBUG] ==> End Attributed Text Debug <==\n\n");
+}
+
 static inline bool ax_get_text(struct ax* ax) {
   CFTypeRef text_ref = NULL;
   AXError error = AXUIElementCopyAttributeValue(ax->selected_element,
                                                 kAXValueAttribute,
                                                 &text_ref            );
+                                                
+  // Try to get attributed text as well
+  CFTypeRef attributed_text_ref = NULL;
+  CFTypeRef value_ref = NULL;
+  AXError attr_error = AXUIElementCopyAttributeValue(ax->selected_element,
+                                                     kAXValueAttribute,
+                                                     &value_ref);
+                                                     
+  if (attr_error == kAXErrorSuccess && value_ref) {
+    CFIndex text_length = CFStringGetLength((CFStringRef)value_ref);
+    CFRange range = CFRangeMake(0, text_length);
+    AXValueRef range_value = AXValueCreate(kAXValueCFRangeType, &range);
+    
+    printf("[DEBUG] Attempting to get attributed string for range (0, %ld)\n", text_length);
+    
+    AXError param_error = AXUIElementCopyParameterizedAttributeValue(ax->selected_element,
+                                                                     CFSTR("AXAttributedStringForRange"),
+                                                                     range_value,
+                                                                     &attributed_text_ref);
+    
+    printf("[DEBUG] AXUIElementCopyParameterizedAttributeValue result: %d\n", param_error);
+    
+    if (param_error == kAXErrorSuccess && attributed_text_ref) {
+      debug_print_attributed_text(attributed_text_ref);
+    } else {
+      printf("[DEBUG] Failed to get attributed text, error: %d\n", param_error);
+    }
+    
+    CFRelease(range_value);
+    if (attributed_text_ref) CFRelease(attributed_text_ref);
+    CFRelease(value_ref);
+  }
+                                                
   if(error == kAXErrorSuccess) {
     char* raw = cfstring_get_cstring(text_ref);
     if (!raw) {
       CFRelease(text_ref);
       return false;
     } 
+
+    printf("[DEBUG] Plain text from kAXValueAttribute: '%.100s%s'\n", 
+           raw, strlen(raw) > 100 ? "..." : "");
 
     if (!ax->buffer.raw || !(strcmp(ax->buffer.raw, raw) == 0)) {
       if (ax->buffer.raw) free(ax->buffer.raw);
