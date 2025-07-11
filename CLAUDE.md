@@ -24,7 +24,7 @@ SketchyVim is a macOS application that transforms accessible input fields into f
 - `bin/` - Build output directory
 
 ## Build System
-- Uses makefile for building
+- Uses makefile for building (`just make` to run)
 - Output binary: `bin/svim`
 - Homebrew formula available at `FelixKratz/formulae`
 - Supports x86, arm64, and universal builds
@@ -151,3 +151,9 @@ this is bold'
 2. Implement attributed string creation when setting text back
 3. Map vim editing operations to preserve attribute ranges where possible
 4. Consider partial text replacement strategies for small edits
+
+## Development Workflow
+- Now using justfiles for all commands
+  - Replaced traditional makefiles with just (a command runner)
+  - Simplifies build, test, and deployment processes
+  - Provides more flexible and readable command definitions
