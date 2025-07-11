@@ -10,4 +10,5 @@ make:
 	make
 
 run: make
+	rm -rf /tmp/svim_attributed_debug.log
 	./bin/svim

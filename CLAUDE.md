@@ -66,91 +66,104 @@ SketchyVim is a macOS application that transforms accessible input fields into f
 - Full text replacement is the standard approach
 - Text updates require a small delay (15ms) for cursor positioning
 
-## Current Task: Text Formatting Preservation Investigation
-
-### Objective
-Investigating whether it's possible to preserve rich text formatting (fonts, colors, styles) when synchronizing between vim buffer and macOS text fields, particularly in applications like Notes.app that support rich text editing.
+## Text Formatting Preservation: Investigation Summary
 
 ### Problem Statement
-Currently, `ax_set_text()` uses plain `CFStringCreateWithCString()` which strips ALL formatting when syncing vim changes back to the text field. This causes rich formatting in Notes.app to be lost during vim editing sessions.
+Notes.app and other rich text applications lose ALL formatting when SketchyVim syncs vim buffer changes back to the text field. This completely breaks the user experience in rich text environments.
 
-### Key Findings from Accessibility API Investigation
+### Core Issue: AXError -25201 (kAXErrorIllegalArgument)
+Line-based vim operations (`o`, `dd`, `dj`, visual mode `d`) consistently fail with attributed strings, causing complete app breakage in Notes.app. Character-level edits in monospace blocks work fine.
 
-#### Available Rich Text Data
-The macOS Accessibility API provides comprehensive formatting information through `kAXAttributedStringForRangeAttribute`:
+### What We've Learned
 
-1. **Semantic Formatting**:
-   - Style names like "Title, Contains paragraphs, Expanded"
-   - List structure with `AXListItemLevel`, `AXListItemPrefix`, `AXListItemIndex`
+#### 1. Accessibility API Capabilities
+- **Reading**: Can extract full attributed strings with `AXAttributedStringForRange`
+- **Writing**: `AXUIElementSetAttributeValue` accepts `CFAttributedStringRef` but has strict rules
+- **Attributes Available**: Semantic (AXStyleName, AXListItem*) and Visual (AXFont, AXForegroundColor)
 
-2. **Visual Formatting**:
-   - Font family, name, and size (e.g., ".AppleSystemUIFontEmphasized", 23.33pt)
-   - Text color as CGColor with RGB values
-   - Text alignment values
+#### 2. Notes.app Behavior Patterns
+- **Character edits in monospace blocks**: Attributed strings accepted ✓
+- **Line operations on headings/lists**: Attributed strings rejected with -25201 ✗
+- **Plain text fallback**: Completely breaks Notes.app ("f's the whole app") ✗
 
-3. **Structured Content**:
-   - Different ranges have different attribute sets
-   - Effective ranges show where formatting applies
-   - Hierarchical list information preserved
+#### 3. Failed Approaches Attempted
 
-#### Debug Implementation Details
-Added comprehensive debugging in `ax_get_text()` (ax.c:31-156):
-- `debug_print_attributed_text()` function extracts all formatting attributes
-- Uses Core Foundation APIs (`CFAttributedStringGetAttributes`, `CFDictionaryGetKeysAndValues`)
-- Samples attributes at multiple positions to show formatting ranges
-- Compatible with C compilation (no Objective-C required)
+**Approach 1: Semantic vs Visual Attribute Filtering**
+- Tried filtering out semantic attributes (AXStyleName, AXListItem*) 
+- Kept only visual attributes (AXFont, AXForegroundColor)
+- Result: Still failed on line operations
 
-#### Example Debug Output
-```
-[DEBUG] ==> Attributed Text Debug Info <==
-[DEBUG] CFTypeRef Type: CFAttributedString (ID: 62)
-[DEBUG] Attributed string plain text length: 80
-[DEBUG] Plain text: 'todo
-this is a list, hehee
+**Approach 2: Length-Based Logic**
+- Same length = use attributed strings (formatting preserved)
+- Different length = use plain text (structural changes)
+- Result: Plain text mode breaks Notes.app completely
 
+**Approach 3: Vim Command Interception**
+- Intercept `o` command, replace with `A` + system Enter keypress
+- Intercept `dd` command, replace with native selection + delete
+- Result: Overcomplicated, breaks vim semantics
 
-this is monocode
+**Approach 4: Post-Operation Detection**
+- Detect newline structure changes after vim operations
+- Switch between attributed/plain based on structural analysis
+- Result: Complex heuristics, unreliable
 
-this is a heading
+**Approach 5: Proper Attribute Reconstruction**
+- Store original attributed string with all ranges/attributes
+- Reconstruct with `CFAttributedStringSetAttributes()` for same-length text
+- Fall back to empty attributed strings for structural changes
+- Result: Even empty attributed strings fail with -25201
 
-this is bold'
-[DEBUG] Attributed string length: 80
-[DEBUG]   Position 0: 4 attributes, effective range (0, 5)
-[DEBUG]     AXForegroundColor: <CGColor 0x600002e2c000> [<CGColorSpace 0x600002e3db00> (kCGColorSpaceICCBased; kCGColorSpaceModelRGB; Generic RGB Profile)] ( 0.271 0.271 0.271 1 )
-[DEBUG]     AXFont: {
-    AXFontFamily = ".AppleSystemUIFont";
-    AXFontName = ".AppleSystemUIFontEmphasized";
-    AXFontSize = "23.33333333333334";
-    AXVisibleName = "System Font Emphasized";
-}
-[DEBUG]     AXATextAlignmentValue: <CFNumber 0x8fb1597241c3fc1e [0x1f6798120]>{value = +0, type = kCFNumberSInt64Type}
-[DEBUG]     AXStyleName: <CFString 0x600001f6e380 [0x1f6798120]>{contents = "Title, Contains paragraphs, Expanded"}
-[DEBUG]   Position 8: 6 attributes, effective range (5, 24)
-[DEBUG]     AXListItemLevel: <CFNumber 0x8fb1597241c3fc1e [0x1f6798120]>{value = +0, type = kCFNumberSInt64Type}
-[DEBUG]     AXForegroundColor: <CGColor 0x600002e2c060> [<CGColorSpace 0x600002e3db00> (kCGColorSpaceICCBased; kCGColorSpaceModelRGB; Generic RGB Profile)] ( 0.271 0.271 0.271 1 )
-[DEBUG]     AXListItemPrefix: dash 0x600000a3d2a0 {} Len 4
-[DEBUG]     AXFont: {
-    AXFontFamily = ".AppleSystemUIFont";
-    AXFontName = ".AppleSystemUIFont";
-    AXFontSize = "15.16666666666667";
-    AXVisibleName = "System Font Regular";
-}
-[DEBUG]     AXATextAlignmentValue: <CFNumber 0x8fb1597241c3fc1e [0x1f6798120]>{value = +0, type = kCFNumberSInt64Type}
-[DEBUG]     AXListItemIndex: <CFNumber 0x8fb1597241c3fd1e [0x1f6798120]>{value = +2, type = kCFNumberSInt64Type}
-[DEBUG] ==> End Attributed Text Debug <==
-```
+### Key Insights
 
-#### Current Limitations
-- `ax_set_text()` only accepts plain strings, destroying all formatting
-- No mechanism to reconstruct or preserve attribute ranges during vim sync
-- Rich text applications lose formatting completely during vim editing
+#### The Fundamental Mismatch
+Notes.app has semantic understanding of document structure. When vim performs line operations:
+1. Semantic attributes (headings, lists) have strict structural rules
+2. These attributes cannot span or break at arbitrary newline positions
+3. Line-based operations violate these semantic constraints
+4. Notes.app rejects the entire attributed string rather than adapt
 
-#### Potential Solutions
-0. Look into the scroll solution and if i want to adapt it, maybe it's a good TypeWriter Mode hack :)
-1. Store original attributed text structure before vim sync
-2. Implement attributed string creation when setting text back
-3. Map vim editing operations to preserve attribute ranges where possible
-4. Consider partial text replacement strategies for small edits
+#### The "Never Plain Text" Constraint
+- User requirement: "never ever want plain text mode, it f's the whole app"
+- Plain text destroys Notes.app's rich text infrastructure
+- Must find attributed string solution that works for ALL operations
+
+### Current Status: All Approaches Failed
+After 5 different implementation attempts, line operations still break with attributed strings, and plain text fallback is unacceptable.
+
+### Plausible Next Steps
+
+#### 1. Hybrid Text Replacement Strategy
+Instead of full buffer replacement, implement targeted range replacement:
+- Character edits: Replace specific ranges while preserving surrounding attributes
+- Line operations: Use `AXReplaceStringInRange` (if available) for surgical changes
+- Preserve semantic structure by not touching heading/list attribute boundaries
+
+#### 2. Application-Specific Adaptation
+- Detect when in Notes.app vs other applications
+- Notes.app: Use specialized handling that respects semantic structure
+- Other apps: Use current attributed string approach
+- May require app-specific heuristics for what operations are "safe"
+
+#### 3. Accessibility API Deep Dive
+- Research undocumented accessibility APIs that might handle rich text better
+- Investigate `AXReplaceRangeWithText` despite being unreliable
+- Look into alternative attribute preservation methods
+
+#### 4. Vim Buffer Synchronization Rethink
+- Instead of vim→app sync, consider app→vim sync priority
+- Let Notes.app handle line operations natively
+- Sync vim buffer state after Notes.app completes the operation
+- Would require fundamental architecture change
+
+#### 5. Partial Workaround Acceptance
+- Accept that some vim operations cannot preserve formatting
+- Implement "formatting-safe" vim subset for rich text contexts
+- Provide clear feedback when operations would break formatting
+- Allow user to choose between full vim functionality vs formatting preservation
+
+### Development Context
+The codebase uses Core Foundation C APIs exclusively. All attributed string manipulation must be compatible with C compilation (no Objective-C NSAttributedString conveniences available).
 
 ## Development Workflow
 - Now using justfiles for all commands
